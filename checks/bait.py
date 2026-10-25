@@ -1,15 +1,13 @@
 """Режим «ИИ-приманка»: бот сам переписывается с мошенником, тянет время и собирает его реквизиты."""
 import json
-import os
 import random
 import re
 from datetime import datetime
 
-from anthropic import Anthropic
 
 from checks.bait_phrases import DEFAULT, pick_topic
+from checks.llm import ask_llm, provider
 
-MODEL = os.getenv("CLAUDE_MODEL", "claude-haiku-5-5")
 DB_FILE = "scam_db.json"
 
 PROMPT = """Ты играешь роль обычного мужчины, который вроде бы хочет помочь, но вообще не понимает, что от него хотят.
@@ -46,17 +44,14 @@ def fallback_reply(history):
 
 
 def bait_reply(history):
-    """Просит Claude придумать следующий ответ мошеннику. history — список строк диалога."""
-    if not os.getenv("ANTHROPIC_API_KEY", "").startswith("sk-"):  # нет настоящего ключа — работаем без ИИ
+    """Просит ИИ придумать следующий ответ мошеннику. Нет ИИ или ошибка — берём заготовку."""
+    if provider() is None:
         return fallback_reply(history)
     try:
-        response = Anthropic().messages.create(
-            model=MODEL,
-            max_tokens=150,
-            messages=[{"role": "user", "content": PROMPT.format(history="\n".join(history))}],
-        )
-        return response.content[0].text.strip().strip('"«»')
-    except Exception:
+        reply = ask_llm(PROMPT.format(history="\n".join(history)), max_tokens=150)
+        return reply.strip().strip('"«»') or fallback_reply(history)
+    except Exception as e:
+        print(f"[ИИ] ошибка приманки: {e}")
         return fallback_reply(history)
 
 

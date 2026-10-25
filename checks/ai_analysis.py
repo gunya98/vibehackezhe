@@ -1,10 +1,8 @@
-"""Анализ сообщения (и картинки) с помощью Claude API."""
+"""Анализ сообщения (и картинки) с помощью ИИ (GigaChat или Claude)."""
 import json
-import os
 
-from anthropic import Anthropic
+from checks.llm import ask_llm, provider
 
-MODEL = os.getenv("CLAUDE_MODEL", "claude-haiku-5-5")
 
 PROMPT = """Ты — эксперт по мошенничеству в Telegram и мессенджерах в России.
 Тебе переслали подозрительное сообщение (и, возможно, картинку). Также даны сигналы простых проверок.
@@ -34,31 +32,21 @@ PROMPT = """Ты — эксперт по мошенничеству в Telegram 
 
 
 def analyze_with_ai(text, other_signals, image_b64=None, history=None):
-    """Отправляет сообщение (и историю диалога) в Claude и возвращает (сигнал, список советов).
-    Без ключа возвращает (None, [])."""
-    if not os.getenv("ANTHROPIC_API_KEY", "").startswith("sk-"):  # нет настоящего ключа — работаем без ИИ
+    """Отправляет сообщение (и историю диалога) в ИИ и возвращает (сигнал, список советов).
+    Если ИИ не подключён — возвращает (None, [])."""
+    if provider() is None:
         return None, []
 
     signals_text = "\n".join(f"- {s['name']}: {s['verdict']} — {s['explanation']}" for s in other_signals) or "- нет"
     history_text = "\n".join(history) if history else "(нет)"
     prompt = PROMPT.format(text=text or "(только картинка)", signals=signals_text, history=history_text)
-    content = [{"type": "text", "text": prompt}]
-    if image_b64:
-        content.insert(0, {"type": "image",
-                           "source": {"type": "base64", "media_type": "image/jpeg", "data": image_b64}})
 
     try:
-        client = Anthropic()
-        response = client.messages.create(
-            model=MODEL,
-            max_tokens=600,
-            messages=[{"role": "user", "content": content}],
-        )
-        raw = response.content[0].text
+        raw = ask_llm(prompt, image_b64)
         data = json.loads(raw[raw.find("{"): raw.rfind("}") + 1])  # вырезаем JSON из ответа
     except Exception as e:
-        return {"name": "🤖 ИИ-анализ", "verdict": "unclear", "confidence": 0.0,
-                "explanation": f"ИИ недоступен: {e}"}, []
+        print(f"[ИИ] ошибка: {e}")
+        return None, []  # ИИ сломался — не показываем это пользователю, работаем на правилах
 
     scheme = f" Схема: {data['scheme']}." if data.get("scheme") else ""
     signal = {
