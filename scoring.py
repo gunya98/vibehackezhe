@@ -46,8 +46,10 @@ def analyze(text, image_b64=None, origin=None, use_ai=True, history=None):
         weights = [max(s["confidence"], 0.1) for s in signals]
         danger = sum(DANGER.get(s["verdict"], 0.4) * w for s, w in zip(signals, weights)) / sum(weights)
         certainty = sum(weights) / len(weights)
-        if any(s["verdict"] == "scam" and s["confidence"] >= 0.8 for s in signals):
-            danger = max(danger, 0.75)  # одна железная улика (поддельный домен, код из СМС) решает
+        # Железная улика решает: если хоть одна проверка уверенно видит мошенничество (поддельный домен,
+        # просьба кода), «спокойные» сигналы вроде официальной ссылки не могут её заглушить.
+        if any(s["verdict"] == "scam" and s["confidence"] >= 0.6 for s in signals):
+            danger = max(danger, 0.75)
         level = "red" if danger >= 0.65 else "yellow" if danger >= 0.3 else "green"
 
     emoji, title = LEVELS[level]
