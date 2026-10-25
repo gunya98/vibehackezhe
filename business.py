@@ -9,6 +9,7 @@ from aiogram import Bot, F, Router
 from aiogram.types import BusinessConnection, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 import profiles
+from checks.rudeness import check_rudeness
 from checks.bait import WANTED, bait_reply, extract_trophies, hook_reply, save_trophies
 from scoring import analyze
 from ui import format_report, photo_to_b64
@@ -125,6 +126,10 @@ async def on_message(message: Message, bot: Bot):
     HISTORY[key].append(f"Собеседник: {text or '(картинка)'}")
 
     if key in BAIT:
+        rudeness = check_rudeness(text)
+        if rudeness:  # собеседник грубит или угрожает — бот выходит из разговора и отдаёт его человеку
+            await hand_over(bot, connection, key, rudeness, text)
+            return
         await bait_step(bot, message, connection, history)
         return
 
@@ -312,6 +317,27 @@ async def on_stop_button(callback: CallbackQuery):
     await callback.message.edit_reply_markup(reply_markup=None)
     await callback.message.answer("⏹ Приманка выключена. Дальше переписку ведёшь ты — я снова только проверяю "
                                   "сообщения и предупреждаю.\n\n" + summary(key), parse_mode="HTML")
+
+
+HAND_OVER_ADVICE = {
+    "угрозы": "Ему не отвечайте. Сохраните скриншоты переписки, заблокируйте аккаунт и пожалуйтесь на него. "
+              "Если угрозы касаются вас или близких — обратитесь в полицию (102).",
+    "мат": "Можно не отвечать: заблокируйте аккаунт и пожалуйтесь на него (⋮ → Пожаловаться).",
+    "оскорбления": "Можно не отвечать: заблокируйте аккаунт и пожалуйтесь на него (⋮ → Пожаловаться).",
+}
+
+
+async def hand_over(bot: Bot, connection, key, rudeness, text):
+    """Собеседник начал грубить — выключаем приманку и передаём разговор владельцу."""
+    BAIT.pop(key, None)
+    cancel(REPLY_TASKS, key)
+    cancel(HOOK_TASKS, key)
+    print(f"[business] собеседник перешёл на {rudeness} — приманка выключена, разговор передан владельцу")
+    await bot.send_message(
+        connection.user_chat_id,
+        f"🛑 <b>Собеседник перешёл на {rudeness}</b> — я прекратил отвечать и передаю разговор вам.\n"
+        f"<i>«{html.escape(text[:150])}»</i>\n\n"
+        f"{HAND_OVER_ADVICE[rudeness]}\n\n" + summary(key), parse_mode="HTML")
 
 
 def owner_stats(owner_id):

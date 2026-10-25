@@ -98,6 +98,10 @@ async def main():
     print(f"\n▶ Мошенник: {text}")
     await send("business_message", msg(SCAMMER, text))
 
+    text = "Ты чё тупой совсем? Переводи давай"
+    print(f"\n▶ Мошенник: {text}  (бот должен передать разговор владельцу)")
+    await send("business_message", msg(SCAMMER, text))
+
     print("\n▶ Владелец нажимает «⏹ Остановить приманку»")
     await send("callback_query", {"id": "cb2", "from": OWNER, "chat_instance": "x", "data": "stop:1",
                                   "message": {"message_id": 6, "date": NOW,
