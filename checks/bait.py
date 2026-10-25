@@ -13,14 +13,18 @@ DB_FILE = "scam_db.json"
 
 SYSTEM_PROMPT = """Ты — живой человек, владелец этого Telegram-аккаунта. Тебе пишет мошенник.
 Ты делаешь вид, что веришь и хочешь помочь, но тупишь, отвлекаешься и переспрашиваешь.
-Цель — тянуть время и выманить у него реквизиты: номер карты или телефона, ссылку, имя, «отдел».
+Ты всегда вежлив и спокоен: обращаешься на «вы», говоришь «пожалуйста», «извините», «подождите минутку».
+Никогда не грубишь, не раздражаешься, не торопишься и не спешишь с действиями.
+Цель — как можно дольше тянуть время и выманить у него реквизиты: номер карты или телефона, ссылку, имя, «отдел».
 
 КТО ТЫ: {persona}
 
 КАК ТЫ ПИШЕШЬ:
 - ОДНО короткое сообщение, 2–12 слов. Никогда не пиши абзацы и списки.
-- Как в мессенджере: без приветствий, без «Конечно», «Понимаю», «Спасибо за информацию».
-- Не объясняй, не рассуждай, не извиняйся длинно. Просто реагируй, как человек на бегу.
+- Если это твоё первое сообщение в переписке — начни с приветствия («Здравствуйте», «Добрый день»).
+- Каждый раз находи вежливую причину отложить действие или переспросить: очки, за рулём, на работе,
+  приложение не грузит, не тот код, не понял инструкцию. Задавай уточняющие вопросы.
+- Без канцелярита вроде «Спасибо за информацию» и «Понимаю вашу озабоченность». Не рассуждай длинно.
 - Без эмодзи, кавычек и подписей. Только текст сообщения.
 - Говори в своём роде (мужском или женском) и в стиле своего возраста.
 - {punctuation}
@@ -54,6 +58,8 @@ def fallback_reply(history, profile=None):
     phrases = pick_topic(last)
     used = "\n".join(history)
     fresh = [p for p in phrases if p not in used] or [p for p in DEFAULT if p not in used] or phrases
+    if profile and profile["age"] == "young":  # у студентов нет жены и детей
+        fresh = [p for p in fresh if not re.search(r"жен|муж|ребён|внук", p, re.IGNORECASE)] or fresh
     reply = random.choice(fresh)
     if profile and profile["gender"] == "f":
         reply = feminize(reply)
@@ -90,7 +96,7 @@ def casual(text, age):
 
 
 # Канцелярские фразы, которыми ИИ любит начинать ответ, а живые люди так не пишут
-FILLERS = r"^(конечно|понимаю|хорошо|спасибо за информацию|извините|здравствуйте|добрый день)[,!.]?\s+"
+FILLERS = r"^(конечно|спасибо за информацию)[,!.]?\s+"
 # Если в предложении есть такое — это «голос робота», выкидываем предложение целиком
 ROBOTIC = ("озабочен", "понимаю ваш", "благодарю", "информаци", "к сожалению", "уважаем", "обратите внимание",
            "как языковая", "как ии", "я не могу помочь")
@@ -122,11 +128,23 @@ def humanize(text, lowercase=True, max_words=14):
     return text
 
 
+GREETINGS = {"young": "здравствуйте", "adult": "Добрый день", "middle": "Добрый день", "senior": "Здравствуйте"}
+
+
+def add_greeting(reply, history, age):
+    """Если это первое сообщение владельца в переписке — вежливо здороваемся."""
+    already_wrote = any(line.startswith("Владелец:") for line in history)
+    if already_wrote or re.match(r"(здравствуй|добр|привет)", reply, re.IGNORECASE):
+        return reply
+    greeting = GREETINGS[age]
+    return f"{greeting}. {reply[0].upper() + reply[1:]}" if age in ("middle", "senior") else f"{greeting}, {reply}"
+
+
 def bait_reply(history, profile=None):
     """Просит ИИ придумать следующий ответ мошеннику в роли владельца. Нет ИИ или ошибка — берём заготовку."""
     profile = profile or DEFAULT_PROFILE
     if provider() is None:
-        return fallback_reply(history, profile)
+        return add_greeting(fallback_reply(history, profile), history, profile["age"])
 
     # 3 заготовки по теме последнего сообщения мошенника — как пример, что примерно ответить
     last = next((line for line in reversed(history) if not line.startswith("Владелец:")), "")
@@ -143,10 +161,11 @@ def bait_reply(history, profile=None):
         reply = ask_llm(USER_PROMPT.format(history="\n".join(dialog)), max_tokens=40,
                         system=system, temperature=0.9)
         reply = humanize(reply, lowercase=profile["age"] in ("young", "adult"))
-        return casual(reply, profile["age"]) if reply else fallback_reply(history, profile)
+        reply = casual(reply, profile["age"]) if reply else fallback_reply(history, profile)
+        return add_greeting(reply, history, profile["age"])
     except Exception as e:
         print(f"[ИИ] ошибка приманки: {e}")
-        return fallback_reply(history, profile)
+        return add_greeting(fallback_reply(history, profile), history, profile["age"])
 
 
 def extract_trophies(text):

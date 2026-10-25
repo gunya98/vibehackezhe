@@ -21,7 +21,7 @@ WARNED = {}                                   # (подключение, чат)
 BAIT = {}                                     # (подключение, чат) -> номер кнопки, где сейчас работает приманка
 PENDING = {}                                  # номер кнопки -> (подключение, чат)
 RANK = {"green": 0, "yellow": 1, "red": 2}
-BAIT_DELAY = (2, 5)  # сколько секунд бот «думает», прежде чем начать «печатать»
+BAIT_DELAY = (5, 10)  # сколько секунд бот «думает», прежде чем начать «печатать» (не спешим)
 
 
 async def get_connection(bot: Bot, connection_id):
@@ -174,7 +174,7 @@ async def send_bait_reply(bot: Bot, connection, chat_id, history):
     except Exception:
         pass  # «печатает…» — просто украшение, без него тоже работаем
     if BAIT_DELAY[1]:  # в имитации паузы выключены
-        await asyncio.sleep(min(len(reply) / 12, 8))  # ~12 символов в секунду, не дольше 8 секунд
+        await asyncio.sleep(min(len(reply) / 8, 12))  # ~8 символов в секунду, не дольше 12 секунд
     if (connection.id, chat_id) not in BAIT:
         return  # пока «думали», владелец нажал «Остановить»
     try:
