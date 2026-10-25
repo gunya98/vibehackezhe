@@ -6,6 +6,16 @@
 - иначе ничего → функции возвращают None, и бот работает без ИИ (на правилах и заготовках).
 """
 import os
+import re
+
+# Фразы, которыми ИИ отказывается отвечать. Такой ответ нельзя отправлять собеседнику — это «ошибка».
+REFUSALS = re.compile(r"чувствительн|неправильного толкования|не могу (помочь|ответить|обсуждать)|"
+                      r"как (нейросетевая|языковая) модель|я не (могу|буду) участвовать|"
+                      r"не обладаю собственн|давайте сменим тему|не могу выполнить", re.IGNORECASE)
+
+
+class RefusalError(Exception):
+    """ИИ отказался отвечать (сработал фильтр «чувствительных тем»)."""
 
 
 def provider():
@@ -37,7 +47,10 @@ def ask_llm(prompt, image_b64=None, max_tokens=600, system=None, temperature=Non
             if temperature is not None:
                 payload["temperature"] = temperature
             response = giga.chat(payload)
-        return response.choices[0].message.content
+        choice = response.choices[0]
+        if choice.finish_reason == "blacklist":  # так GigaChat помечает ответ своего фильтра
+            raise RefusalError(choice.message.content)
+        return check_refusal(choice.message.content)
 
     if name == "claude":
         from anthropic import Anthropic
@@ -51,6 +64,13 @@ def ask_llm(prompt, image_b64=None, max_tokens=600, system=None, temperature=Non
         response = Anthropic().messages.create(model=os.getenv("CLAUDE_MODEL", "claude-haiku-5-5"),
                                                max_tokens=max_tokens,
                                                messages=[{"role": "user", "content": content}], **extra)
-        return response.content[0].text
+        return check_refusal(response.content[0].text)
 
     return None
+
+
+def check_refusal(text):
+    """Если ИИ вместо ответа написал отказ — бросаем ошибку, чтобы вызвавший взял запасной вариант."""
+    if text and REFUSALS.search(text):
+        raise RefusalError(text)
+    return text
