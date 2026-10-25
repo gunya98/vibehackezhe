@@ -11,32 +11,33 @@ from profiles import DEFAULT as DEFAULT_PROFILE, feminize, persona, style_exampl
 
 DB_FILE = "scam_db.json"
 
-PROMPT = """Ты играешь роль владельца Telegram-аккаунта. Тебе пишет мошенник,
-но ты делаешь вид, что ничего не понимаешь: вроде хочешь помочь, но тупишь, отвлекаешься и переспрашиваешь.
+SYSTEM_PROMPT = """Ты — живой человек, владелец этого Telegram-аккаунта. Тебе пишет мошенник.
+Ты делаешь вид, что веришь и хочешь помочь, но тупишь, отвлекаешься и переспрашиваешь.
+Цель — тянуть время и выманить у него реквизиты: номер карты или телефона, ссылку, имя, «отдел».
 
 КТО ТЫ: {persona}
-Говори о себе в соответствующем роде (мужском или женском) и в стиле своего возраста.
 
-ЦЕЛЬ: тянуть время и выманивать у мошенника реквизиты — номер карты или телефона, ссылку, имя, «отдел».
+КАК ТЫ ПИШЕШЬ:
+- ОДНО короткое сообщение, 2–12 слов. Никогда не пиши абзацы и списки.
+- Как в мессенджере: без приветствий, без «Конечно», «Понимаю», «Спасибо за информацию».
+- Не объясняй, не рассуждай, не извиняйся длинно. Просто реагируй, как человек на бегу.
+- Без эмодзи, кавычек и подписей. Только текст сообщения.
+- Говори в своём роде (мужском или женском) и в стиле своего возраста.
 
-ЖЁСТКИЕ ПРАВИЛА:
-- Никогда не называй настоящие данные: коды, номера карт, паспорт, адрес, пароли. Код «не пришёл», «пришло два», «смахнул», «пишет неверный».
-- Никогда не говори, что уже перевёл деньги или ввёл данные.
-- Не раскрывай, что понял про мошенничество и что ты бот.
-- Не повторяй свои прошлые реплики из переписки.
+НЕЛЬЗЯ:
+- называть коды, номера карт, паспорт, адрес, пароли (код «не пришёл», «пришло два», «смахнул», «пишет неверный»);
+- говорить, что уже перевёл деньги или ввёл данные;
+- показывать, что понял про мошенничество или что ты бот;
+- повторять свои прошлые реплики.
 
-КАК ПИСАТЬ: одно короткое сообщение (обычно 3–15 слов), как в мессенджере, без эмодзи, кавычек и подписей — только текст.
-
-Примеры того, как ты пишешь:
+Так ты пишешь:
 {style}
+{examples}"""
 
-Подходящие по смыслу реплики (перескажи по-своему, в своём стиле):
-{examples}
-
-Переписка (последнее сообщение — от мошенника):
+USER_PROMPT = """Переписка («Он» — мошенник, «Ты» — ты):
 {history}
 
-Твой ответ:"""
+Напиши своё следующее сообщение. Коротко, 2–12 слов."""
 
 # Что собираем из сообщений мошенника
 TROPHY_PATTERNS = {
@@ -58,11 +59,32 @@ def fallback_reply(history, profile=None):
     return reply
 
 
-def humanize(text, lowercase=True):
-    """Делает ответ ИИ похожим на сообщение живого человека: без кавычек, часто с маленькой буквы, без точки."""
+# Канцелярские фразы, которыми ИИ любит начинать ответ, а живые люди так не пишут
+FILLERS = r"^(конечно|понимаю|хорошо|спасибо за информацию|извините|здравствуйте|добрый день)[,!.]?\s+"
+# Если в предложении есть такое — это «голос робота», выкидываем предложение целиком
+ROBOTIC = ("озабочен", "понимаю ваш", "благодарю", "информаци", "к сожалению", "уважаем", "обратите внимание",
+           "как языковая", "как ии", "я не могу помочь")
+
+
+def humanize(text, lowercase=True, max_words=14):
+    """Делает ответ ИИ похожим на сообщение живого человека: коротко, без кавычек, подписей и канцелярита."""
     text = text.strip().strip('"«»').strip()
-    text = re.sub(r"^[А-ЯЁA-Z][\w ]{0,25}:\s*", "", text)  # ИИ иногда подписывает реплику: «Серёга: ...»
-    text = text.split("\n")[0]  # только первая строка
+    text = re.sub(r"^[А-ЯЁA-Z][\w ]{0,25}:\s*", "", text)  # ИИ иногда подписывает реплику: «Ты: ...»
+    text = text.split("\n")[0].strip()                     # только первая строка
+    text = re.sub(FILLERS, "", text, flags=re.IGNORECASE).strip()
+
+    # Длинный ответ режем до первых 1–2 предложений, которые укладываются в лимит слов
+    sentences = re.split(r"(?<=[.!?…])\s+", text)
+    human = [x for x in sentences if not any(r in x.lower() for r in ROBOTIC)]
+    sentences = human or sentences
+    short = sentences[0]
+    if len(sentences) > 1 and len((short + " " + sentences[1]).split()) <= max_words:
+        short += " " + sentences[1]
+    words = short.split()
+    if len(words) > max_words:
+        short = " ".join(words[:max_words])
+    text = re.sub(r"^(однако|тем не менее|впрочем|также)[,]?\s+", "", short.strip(), flags=re.IGNORECASE)
+
     if lowercase and text.endswith(".") and not text.endswith(".."):
         text = text[:-1]
     if lowercase and random.random() < 0.6 and text[:1].isupper():
@@ -75,13 +97,20 @@ def bait_reply(history, profile=None):
     profile = profile or DEFAULT_PROFILE
     if provider() is None:
         return fallback_reply(history, profile)
-    # Подсказываем ИИ стиль: 3 заготовки по теме последнего сообщения мошенника
+
+    # 3 заготовки по теме последнего сообщения мошенника — как пример, что примерно ответить
     last = next((line for line in reversed(history) if not line.startswith("Владелец:")), "")
-    examples = "\n".join(f"- {p}" for p in random.sample(pick_topic(last), k=min(3, len(pick_topic(last)))))
+    topic = pick_topic(last)
+    examples = "\n".join(f"- {p}" for p in random.sample(topic, k=min(3, len(topic))))
+
+    # Последние 8 реплик, подписанные коротко и понятно для модели
+    dialog = [line.replace("Владелец:", "Ты:").replace("Собеседник:", "Он:").replace("Мошенник:", "Он:")
+              for line in history[-8:]]
+    system = SYSTEM_PROMPT.format(persona=persona(profile), examples=examples,
+                                  style="\n".join(f"- {p}" for p in style_examples(profile)))
     try:
-        prompt = PROMPT.format(persona=persona(profile), style="\n".join(f"- {p}" for p in style_examples(profile)),
-                               examples=examples, history="\n".join(history))
-        reply = ask_llm(prompt, max_tokens=80)
+        reply = ask_llm(USER_PROMPT.format(history="\n".join(dialog)), max_tokens=40,
+                        system=system, temperature=0.9)
         return humanize(reply, lowercase=profile["age"] in ("young", "adult")) or fallback_reply(history, profile)
     except Exception as e:
         print(f"[ИИ] ошибка приманки: {e}")

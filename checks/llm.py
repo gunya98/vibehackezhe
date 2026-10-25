@@ -17,8 +17,10 @@ def provider():
     return None
 
 
-def ask_llm(prompt, image_b64=None, max_tokens=600):
+def ask_llm(prompt, image_b64=None, max_tokens=600, system=None, temperature=None):
     """Отправляет текст (и, для Claude, картинку) в ИИ и возвращает ответ строкой. Нет ИИ — None.
+    system — «кто ты и как себя вести» (отдельно от вопроса, модели лучше это соблюдают);
+    temperature — разнообразие ответов: 0 — всегда одинаково, 1 — живее и непредсказуемее.
     Ошибки сети/ключа не глушим: их обрабатывает тот, кто вызвал."""
     name = provider()
 
@@ -30,7 +32,11 @@ def ask_llm(prompt, image_b64=None, max_tokens=600):
                       scope=os.getenv("GIGACHAT_SCOPE", "GIGACHAT_API_PERS"),
                       model=os.getenv("GIGACHAT_MODEL", "GigaChat-2"),
                       verify_ssl_certs=False) as giga:
-            response = giga.chat({"messages": [{"role": "user", "content": prompt}], "max_tokens": max_tokens})
+            messages = ([{"role": "system", "content": system}] if system else []) + [{"role": "user", "content": prompt}]
+            payload = {"messages": messages, "max_tokens": max_tokens}
+            if temperature is not None:
+                payload["temperature"] = temperature
+            response = giga.chat(payload)
         return response.choices[0].message.content
 
     if name == "claude":
@@ -39,9 +45,12 @@ def ask_llm(prompt, image_b64=None, max_tokens=600):
         if image_b64:
             content.insert(0, {"type": "image",
                                "source": {"type": "base64", "media_type": "image/jpeg", "data": image_b64}})
+        extra = {"system": system} if system else {}
+        if temperature is not None:
+            extra["temperature"] = temperature
         response = Anthropic().messages.create(model=os.getenv("CLAUDE_MODEL", "claude-haiku-5-5"),
                                                max_tokens=max_tokens,
-                                               messages=[{"role": "user", "content": content}])
+                                               messages=[{"role": "user", "content": content}], **extra)
         return response.content[0].text
 
     return None
