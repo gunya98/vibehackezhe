@@ -41,10 +41,17 @@ TROPHY_PATTERNS = {
 }
 
 
+def fallback_reply(history):
+    """Готовая фраза без ИИ: выбираем ту, что ещё не звучала в диалоге."""
+    used = "\n".join(history)
+    fresh = [p for p in FALLBACK if p not in used]
+    return random.choice(fresh or FALLBACK)
+
+
 def bait_reply(history):
     """Просит Claude придумать следующий ответ мошеннику. history — список строк диалога."""
     if not os.getenv("ANTHROPIC_API_KEY", "").startswith("sk-"):  # нет настоящего ключа — работаем без ИИ
-        return random.choice(FALLBACK)
+        return fallback_reply(history)
     try:
         response = Anthropic().messages.create(
             model=MODEL,
@@ -53,7 +60,7 @@ def bait_reply(history):
         )
         return response.content[0].text.strip().strip('"«»')
     except Exception:
-        return random.choice(FALLBACK)
+        return fallback_reply(history)
 
 
 def extract_trophies(text):

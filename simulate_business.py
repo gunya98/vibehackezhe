@@ -31,7 +31,9 @@ class FakeBot(Bot):
                                       rights={"can_reply": True})
         if isinstance(method, SendMessage):
             who = "МОШЕННИКУ от имени владельца" if method.business_connection_id else "ВЛАДЕЛЬЦУ"
-            buttons = " [есть кнопки]" if method.reply_markup else ""
+            buttons = ""
+            if method.reply_markup:
+                buttons = " [" + ", ".join(b.text for row in method.reply_markup.inline_keyboard for b in row) + "]"
             print(f"\n  📤 Бот → {who}{buttons}:\n    " + method.text.replace("\n", "\n    ")[:600])
             return Message(message_id=1, date=NOW, chat={"id": method.chat_id, "type": "private"},
                            text=method.text)
@@ -77,8 +79,14 @@ async def main():
     print(f"\n▶ Мошенник: {text}")
     await send("business_message", msg(SCAMMER, text))
 
-    print("\n▶ Владелец пишет в чат сам")
-    await send("business_message", msg(OWNER, "Я вам не верю"))
+    print("\n▶ Владелец нажимает «⏹ Остановить приманку»")
+    await send("callback_query", {"id": "cb2", "from": OWNER, "chat_instance": "x", "data": "stop:1",
+                                  "message": {"message_id": 6, "date": NOW,
+                                              "chat": {"id": 111, "type": "private"}, "text": "bait"}})
+
+    text = "Алло, вы тут? Переводите быстрее"
+    print(f"\n▶ Мошенник: {text}  (бот должен промолчать)")
+    await send("business_message", msg(SCAMMER, text))
 
     print("\n✅ Имитация завершена")
 

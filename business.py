@@ -17,7 +17,7 @@ router = Router()  # «кусок бота», который подключае�
 CONNECTIONS = {}                              # id подключения -> данные (кто владелец, какие права)
 HISTORY = defaultdict(lambda: deque(maxlen=10))  # (подключение, чат) -> последние 10 сообщений
 WARNED = {}                                   # (подключение, чат) -> о каком уровне уже предупредили
-BAIT = set()                                  # (подключение, чат), где сейчас работает приманка
+BAIT = {}                                     # (подключение, чат) -> номер кнопки, где сейчас работает приманка
 PENDING = {}                                  # номер кнопки -> (подключение, чат)
 RANK = {"green": 0, "yellow": 1, "red": 2}
 BAIT_DELAY = (3, 7)  # сколько секунд «думает» бот перед ответом мошеннику
@@ -67,12 +67,9 @@ async def on_message(message: Message, bot: Bot):
     key = (connection.id, message.chat.id)
     text = message.text or message.caption or ""
 
-    # 1. Пишет сам владелец: запоминаем как контекст; если шла приманка — он перехватил диалог
+    # 1. Пишет сам владелец: просто запоминаем как контекст (приманка выключается кнопкой)
     if message.from_user.id == connection.user.id:
         HISTORY[key].append(f"Владелец: {text}")
-        if key in BAIT:
-            BAIT.discard(key)
-            await bot.send_message(connection.user_chat_id, "✋ Ты ответил сам — приманка выключена.")
         return
 
     # 2. Пишет собеседник
@@ -129,16 +126,27 @@ async def bait_step(bot: Bot, message: Message, connection, history):
     if trophies:
         save_trophies(trophies, text)
         found = "\n".join(f"• {kind}: <code>{html.escape(value)}</code>" for kind, value in trophies)
+        key = (connection.id, message.chat.id)
         await bot.send_message(connection.user_chat_id,
-                               f"🎣 Мошенник выдал реквизиты, сохранил в базу:\n{found}", parse_mode="HTML")
+                               f"🎣 Мошенник выдал реквизиты, сохранил в базу:\n{found}", parse_mode="HTML",
+                               reply_markup=stop_button(BAIT[key]))
 
     await send_bait_reply(bot, connection, message.chat.id, history + [f"Мошенник: {text}"])
+
+
+def stop_button(number):
+    """Кнопка «Остановить приманку» под сообщениями владельцу."""
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="⏹ Остановить приманку", callback_data=f"stop:{number}"),
+    ]])
 
 
 async def send_bait_reply(bot: Bot, connection, chat_id, history):
     """Придумывает реплику «доверчивого человека» и отправляет её мошеннику от имени владельца."""
     reply = await asyncio.to_thread(bait_reply, history)
     await asyncio.sleep(random.uniform(*BAIT_DELAY))  # пауза, чтобы было похоже на живого человека
+    if (connection.id, chat_id) not in BAIT:
+        return  # пока «думали», владелец нажал «Остановить»
     try:
         await bot.send_message(chat_id, reply, business_connection_id=connection.id)
         HISTORY[(connection.id, chat_id)].append(f"Владелец: {reply}")
@@ -152,19 +160,34 @@ async def send_bait_reply(bot: Bot, connection, chat_id, history):
 @router.callback_query(F.data.startswith("bait:"))
 async def on_bait_button(callback: CallbackQuery, bot: Bot):
     """Владелец нажал «Пусть бот ведёт диалог»: включаем приманку и сразу отвечаем мошеннику."""
-    key = PENDING.get(int(callback.data.split(":")[1]))
+    number = int(callback.data.split(":")[1])
+    key = PENDING.get(number)
     if key is None:
         await callback.answer("Кнопка устарела (бот перезапускался)", show_alert=True)
         return
-    BAIT.add(key)
+    BAIT[key] = number
     await callback.answer("🎣 Приманка включена")  # сразу, чтобы кнопка не «висела»
     await callback.message.edit_reply_markup(reply_markup=None)
     await callback.message.answer("🎣 Приманка включена. Сейчас отвечу мошеннику и дальше буду вести диалог, "
-                                  "а сюда присылать всё, что он выдаст. Чтобы остановить — напиши в тот чат сам.")
+                                  "а сюда присылать всё, что он выдаст.", reply_markup=stop_button(number))
 
     connection_id, chat_id = key
     connection = await get_connection(bot, connection_id)
     await send_bait_reply(bot, connection, chat_id, list(HISTORY[key]))
+
+
+@router.callback_query(F.data.startswith("stop:"))
+async def on_stop_button(callback: CallbackQuery):
+    """Владелец нажал «Остановить приманку»."""
+    key = PENDING.get(int(callback.data.split(":")[1]))
+    if key not in BAIT:
+        await callback.answer("Приманка уже выключена")
+        return
+    del BAIT[key]
+    await callback.answer("⏹ Приманка выключена")
+    await callback.message.edit_reply_markup(reply_markup=None)
+    await callback.message.answer("⏹ Приманка выключена. Дальше переписку ведёшь ты — я снова только проверяю "
+                                  "сообщения и предупреждаю.")
 
 
 @router.callback_query(F.data == "ignore")
