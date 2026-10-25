@@ -20,7 +20,7 @@ WARNED = {}                                   # (подключение, чат)
 BAIT = {}                                     # (подключение, чат) -> номер кнопки, где сейчас работает приманка
 PENDING = {}                                  # номер кнопки -> (подключение, чат)
 RANK = {"green": 0, "yellow": 1, "red": 2}
-BAIT_DELAY = (3, 7)  # сколько секунд «думает» бот перед ответом мошеннику
+BAIT_DELAY = (2, 5)  # сколько секунд бот «думает», прежде чем начать «печатать»
 
 
 async def get_connection(bot: Bot, connection_id):
@@ -144,7 +144,14 @@ def stop_button(number):
 async def send_bait_reply(bot: Bot, connection, chat_id, history):
     """Придумывает реплику «доверчивого человека» и отправляет её мошеннику от имени владельца."""
     reply = await asyncio.to_thread(bait_reply, history)
-    await asyncio.sleep(random.uniform(*BAIT_DELAY))  # пауза, чтобы было похоже на живого человека
+    # Как живой человек: сначала «прочитал и думает», потом «печатает…» — дольше для длинных ответов
+    await asyncio.sleep(random.uniform(*BAIT_DELAY))
+    try:
+        await bot.send_chat_action(chat_id, "typing", business_connection_id=connection.id)
+    except Exception:
+        pass  # «печатает…» — просто украшение, без него тоже работаем
+    if BAIT_DELAY[1]:  # в имитации паузы выключены
+        await asyncio.sleep(min(len(reply) / 12, 8))  # ~12 символов в секунду, не дольше 8 секунд
     if (connection.id, chat_id) not in BAIT:
         return  # пока «думали», владелец нажал «Остановить»
     try:
