@@ -21,7 +21,10 @@ WARNED = {}                                   # (подключение, чат)
 BAIT = {}                                     # (подключение, чат) -> номер кнопки, где сейчас работает приманка
 PENDING = {}                                  # номер кнопки -> (подключение, чат)
 RANK = {"green": 0, "yellow": 1, "red": 2}
-BAIT_DELAY = (5, 10)  # сколько секунд бот «думает», прежде чем начать «печатать» (не спешим)
+BAIT_DELAY = (15, 30)  # сколько секунд бот «читает и думает», прежде чем начать «печатать»
+TYPING_SPEED = 5       # символов в секунду, с которыми «печатает» бот (человек с телефона — 3–7)
+MAX_TYPING = 25        # дольше стольких секунд «печатать» не будем
+# Итого: ответ приходит примерно через 25–55 секунд. Для быстрого демо поставьте BAIT_DELAY = (3, 6).
 
 
 async def get_connection(bot: Bot, connection_id):
@@ -164,17 +167,27 @@ def stop_button(number):
     ]])
 
 
+async def show_typing(bot: Bot, chat_id, connection_id, seconds):
+    """Показывает мошеннику «печатает…» нужное время.
+    Telegram сам гасит этот значок через ~5 секунд, поэтому повторяем его каждые 4 секунды."""
+    left = seconds
+    while left > 0:
+        try:
+            await bot.send_chat_action(chat_id, "typing", business_connection_id=connection_id)
+        except Exception:
+            pass  # «печатает…» — просто украшение, без него тоже работаем
+        await asyncio.sleep(min(4, left))
+        left -= 4
+
+
 async def send_bait_reply(bot: Bot, connection, chat_id, history):
     """Придумывает реплику «доверчивого человека» и отправляет её мошеннику от имени владельца."""
     reply = await asyncio.to_thread(bait_reply, history, profiles.get(connection.user.id))
     # Как живой человек: сначала «прочитал и думает», потом «печатает…» — дольше для длинных ответов
     await asyncio.sleep(random.uniform(*BAIT_DELAY))
-    try:
-        await bot.send_chat_action(chat_id, "typing", business_connection_id=connection.id)
-    except Exception:
-        pass  # «печатает…» — просто украшение, без него тоже работаем
     if BAIT_DELAY[1]:  # в имитации паузы выключены
-        await asyncio.sleep(min(len(reply) / 8, 12))  # ~8 символов в секунду, не дольше 12 секунд
+        typing_time = min(len(reply) / TYPING_SPEED, MAX_TYPING)
+        await show_typing(bot, chat_id, connection.id, typing_time)
     if (connection.id, chat_id) not in BAIT:
         return  # пока «думали», владелец нажал «Остановить»
     try:
