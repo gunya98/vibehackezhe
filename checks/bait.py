@@ -43,7 +43,7 @@ TROPHY_PATTERNS = {
 
 def bait_reply(history):
     """Просит Claude придумать следующий ответ мошеннику. history — список строк диалога."""
-    if not os.getenv("ANTHROPIC_API_KEY"):
+    if not os.getenv("ANTHROPIC_API_KEY", "").startswith("sk-"):  # нет настоящего ключа — работаем без ИИ
         return random.choice(FALLBACK)
     try:
         response = Anthropic().messages.create(

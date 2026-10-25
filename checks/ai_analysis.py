@@ -36,7 +36,7 @@ PROMPT = """Ты — эксперт по мошенничеству в Telegram 
 def analyze_with_ai(text, other_signals, image_b64=None, history=None):
     """Отправляет сообщение (и историю диалога) в Claude и возвращает (сигнал, список советов).
     Без ключа возвращает (None, [])."""
-    if not os.getenv("ANTHROPIC_API_KEY"):
+    if not os.getenv("ANTHROPIC_API_KEY", "").startswith("sk-"):  # нет настоящего ключа — работаем без ИИ
         return None, []
 
     signals_text = "\n".join(f"- {s['name']}: {s['verdict']} — {s['explanation']}" for s in other_signals) or "- нет"
