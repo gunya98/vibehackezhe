@@ -9,12 +9,13 @@ import asyncio
 import os
 
 from aiogram import Bot, Dispatcher, F
-from aiogram.filters import CommandStart
+from aiogram.filters import Command, CommandStart
 from aiogram.types import Message
 from dotenv import load_dotenv
 
 load_dotenv()  # читаем ключи из файла .env
 
+import profiles  # noqa: E402
 from business import router as business_router  # noqa: E402
 from scoring import analyze, has_anything_to_check  # noqa: E402
 from ui import format_report, photo_to_b64  # noqa: E402
@@ -28,7 +29,8 @@ WELCOME = (
     "🛡 <b>Защита лички (Telegram Premium):</b> Настройки → Telegram для бизнеса → Чат-боты → "
     "добавь меня и разреши отвечать на сообщения. Я буду проверять входящие сообщения в фоне "
     "и предупреждать тебя здесь.\n\n"
-    "📩 <b>Без Premium:</b> просто перешли мне подозрительное сообщение или скриншот."
+    "📩 <b>Без Premium:</b> просто перешли мне подозрительное сообщение или скриншот.\n\n"
+    "👤 /profile — кто владелец аккаунта (чтобы я правдоподобно отвечал мошенникам)."
 )
 
 
@@ -50,6 +52,12 @@ def get_origin(message):
 async def start(message: Message):
     """Ответ на команду /start."""
     await message.answer(WELCOME, parse_mode="HTML")
+
+
+@dp.message(Command("profile"))
+async def profile(message: Message):
+    """Команда /profile: заново выбрать пол и возраст владельца."""
+    await message.answer(profiles.QUESTION, reply_markup=profiles.gender_buttons())
 
 
 @dp.message(F.chat.type == "private")

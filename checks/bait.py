@@ -7,13 +7,15 @@ from datetime import datetime
 
 from checks.bait_phrases import DEFAULT, pick_topic
 from checks.llm import ask_llm, provider
+from profiles import DEFAULT as DEFAULT_PROFILE, feminize, persona, style_examples
 
 DB_FILE = "scam_db.json"
 
-PROMPT = """Ты — Серёга, 41 год, водитель-экспедитор из Подмосковья. Тебе в Telegram пишет мошенник,
-но ты делаешь вид, что ничего не понимаешь. Ты вроде хочешь помочь, но постоянно тупишь, отвлекаешься и переспрашиваешь.
-О себе (используй иногда, к месту): жена Света, сын Димка в 5 классе, телефон старый с треснутым экраном,
-банковское приложение «вечно глючит», часто за рулём или на погрузке.
+PROMPT = """Ты играешь роль владельца Telegram-аккаунта. Тебе пишет мошенник,
+но ты делаешь вид, что ничего не понимаешь: вроде хочешь помочь, но тупишь, отвлекаешься и переспрашиваешь.
+
+КТО ТЫ: {persona}
+Говори о себе в соответствующем роде (мужском или женском) и в стиле своего возраста.
 
 ЦЕЛЬ: тянуть время и выманивать у мошенника реквизиты — номер карты или телефона, ссылку, имя, «отдел».
 
@@ -23,19 +25,12 @@ PROMPT = """Ты — Серёга, 41 год, водитель-экспедит�
 - Не раскрывай, что понял про мошенничество и что ты бот.
 - Не повторяй свои прошлые реплики из переписки.
 
-КАК ПИСАТЬ (как живой человек в мессенджере):
-- одно короткое сообщение, обычно 3–15 слов;
-- часто с маленькой буквы, без точки в конце, запятые можно пропускать;
-- разговорные слова: щас, чё, норм, ага, блин, слушай, короче, не понял;
-- никаких эмодзи, кавычек, пояснений, подписей — только текст сообщения.
+КАК ПИСАТЬ: одно короткое сообщение (обычно 3–15 слов), как в мессенджере, без эмодзи, кавычек и подписей — только текст.
 
 Примеры того, как ты пишешь:
-- щас погоди, я за рулём, на светофоре гляну
-- а какой код, там два пришло
-- блин приложение опять вылетело. на какую карту говоришь?
-- слушай а ты из какого отделения вообще
-- ссылка не грузит, белый экран. другая есть?
-- не понял, мне чё сделать надо
+{style}
+
+Подходящие по смыслу реплики (перескажи по-своему, в своём стиле):
 {examples}
 
 Переписка (последнее сообщение — от мошенника):
@@ -51,42 +46,46 @@ TROPHY_PATTERNS = {
 }
 
 
-def fallback_reply(history):
+def fallback_reply(history, profile=None):
     """Ответ без ИИ: берём фразу по теме последнего сообщения мошенника, которой ещё не было в диалоге."""
     last = next((line for line in reversed(history) if not line.startswith("Владелец:")), "")
     phrases = pick_topic(last)
     used = "\n".join(history)
     fresh = [p for p in phrases if p not in used] or [p for p in DEFAULT if p not in used] or phrases
-    return random.choice(fresh)
+    reply = random.choice(fresh)
+    if profile and profile["gender"] == "f":
+        reply = feminize(reply)
+    return reply
 
 
-def humanize(text):
+def humanize(text, lowercase=True):
     """Делает ответ ИИ похожим на сообщение живого человека: без кавычек, часто с маленькой буквы, без точки."""
     text = text.strip().strip('"«»').strip()
-    for prefix in ("Серёга:", "Владелец:", "Ответ:"):  # ИИ иногда подписывает реплику
-        if text.startswith(prefix):
-            text = text[len(prefix):].strip()
+    text = re.sub(r"^[А-ЯЁA-Z][\w ]{0,25}:\s*", "", text)  # ИИ иногда подписывает реплику: «Серёга: ...»
     text = text.split("\n")[0]  # только первая строка
-    if text.endswith(".") and not text.endswith(".."):
+    if lowercase and text.endswith(".") and not text.endswith(".."):
         text = text[:-1]
-    if random.random() < 0.6 and text[:1].isupper():
+    if lowercase and random.random() < 0.6 and text[:1].isupper():
         text = text[0].lower() + text[1:]
     return text
 
 
-def bait_reply(history):
-    """Просит ИИ придумать следующий ответ мошеннику. Нет ИИ или ошибка — берём заготовку."""
+def bait_reply(history, profile=None):
+    """Просит ИИ придумать следующий ответ мошеннику в роли владельца. Нет ИИ или ошибка — берём заготовку."""
+    profile = profile or DEFAULT_PROFILE
     if provider() is None:
-        return fallback_reply(history)
+        return fallback_reply(history, profile)
     # Подсказываем ИИ стиль: 3 заготовки по теме последнего сообщения мошенника
     last = next((line for line in reversed(history) if not line.startswith("Владелец:")), "")
     examples = "\n".join(f"- {p}" for p in random.sample(pick_topic(last), k=min(3, len(pick_topic(last)))))
     try:
-        reply = ask_llm(PROMPT.format(history="\n".join(history), examples=examples), max_tokens=80)
-        return humanize(reply) or fallback_reply(history)
+        prompt = PROMPT.format(persona=persona(profile), style="\n".join(f"- {p}" for p in style_examples(profile)),
+                               examples=examples, history="\n".join(history))
+        reply = ask_llm(prompt, max_tokens=80)
+        return humanize(reply, lowercase=profile["age"] in ("young", "adult")) or fallback_reply(history, profile)
     except Exception as e:
         print(f"[ИИ] ошибка приманки: {e}")
-        return fallback_reply(history)
+        return fallback_reply(history, profile)
 
 
 def extract_trophies(text):

@@ -10,11 +10,15 @@ from datetime import datetime
 os.environ.setdefault("TELEGRAM_TOKEN", "123456:TEST_TOKEN_FOR_SIMULATION_ONLY_xxxxxxxx")
 
 from aiogram import Bot  # noqa: E402
-from aiogram.methods import GetBusinessConnection, SendMessage  # noqa: E402
+from aiogram.methods import EditMessageText, GetBusinessConnection, SendMessage  # noqa: E402
 from aiogram.types import BusinessConnection, Message, Update  # noqa: E402
 
 import app  # noqa: E402
 import business  # noqa: E402
+import profiles  # noqa: E402
+
+profiles.PROFILES_FILE = "/tmp/sim_profiles.json"  # имитация не трогает настоящие профили
+profiles.PROFILES.clear()
 
 OWNER = {"id": 111, "is_bot": False, "first_name": "Владелец"}
 SCAMMER = {"id": 7_777_000_001, "is_bot": False, "first_name": "Служба", "last_name": "Безопасности"}
@@ -37,6 +41,8 @@ class FakeBot(Bot):
             print(f"\n  📤 Бот → {who}{buttons}:\n    " + method.text.replace("\n", "\n    ")[:600])
             return Message(message_id=1, date=NOW, chat={"id": method.chat_id, "type": "private"},
                            text=method.text)
+        if isinstance(method, EditMessageText):
+            print(f"\n  ✏️ Бот изменил сообщение владельцу:\n    {method.text}")
         return True  # остальные запросы (убрать кнопки, ответить на нажатие) считаем успешными
 
 
@@ -63,6 +69,12 @@ async def main():
     print("▶ Владелец подключает бота")
     await send("business_connection", {"id": CONN_ID, "user": OWNER, "user_chat_id": 111, "date": NOW,
                                        "is_enabled": True, "rights": {"can_reply": True}})
+
+    print("\n▶ Владелец выбирает: Женщина, 65+")
+    for i, data in enumerate(["prof:g:f", "prof:a:senior"]):
+        await send("callback_query", {"id": f"p{i}", "from": OWNER, "chat_instance": "x", "data": data,
+                                      "message": {"message_id": 3, "date": NOW,
+                                                  "chat": {"id": 111, "type": "private"}, "text": "q"}})
 
     for text in ["Здравствуйте! Это служба безопасности Сбербанка.",
                  "По вашей карте подозрительная операция, на вас пытаются оформить кредит.",

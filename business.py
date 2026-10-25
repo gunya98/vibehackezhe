@@ -7,6 +7,7 @@ from collections import defaultdict, deque
 from aiogram import Bot, F, Router
 from aiogram.types import BusinessConnection, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
+import profiles
 from checks.bait import bait_reply, extract_trophies, save_trophies
 from scoring import analyze
 from ui import format_report, photo_to_b64
@@ -52,6 +53,28 @@ async def on_connect(connection: BusinessConnection, bot: Bot):
     else:
         text = "Защита выключена. Чтобы включить снова — подключи меня в настройках Telegram для бизнеса."
     await bot.send_message(connection.user_chat_id, text, parse_mode="HTML")
+    if connection.is_enabled and str(connection.user.id) not in profiles.PROFILES:
+        await bot.send_message(connection.user_chat_id, profiles.QUESTION, reply_markup=profiles.gender_buttons())
+
+
+# ---------- профиль владельца: пол и возраст ----------
+
+@router.callback_query(F.data.startswith("prof:g:"))
+async def on_gender(callback: CallbackQuery):
+    """Владелец выбрал пол — спрашиваем возраст."""
+    profiles.save(callback.from_user.id, gender=callback.data.split(":")[2])
+    await callback.answer()
+    await callback.message.edit_text("👤 Сколько лет владельцу аккаунта?", reply_markup=profiles.age_buttons())
+
+
+@router.callback_query(F.data.startswith("prof:a:"))
+async def on_age(callback: CallbackQuery):
+    """Владелец выбрал возраст — профиль готов."""
+    profiles.save(callback.from_user.id, age=callback.data.split(":")[2])
+    name = profiles.persona(profiles.get(callback.from_user.id)).split(",")[0]
+    await callback.answer("Сохранено")
+    await callback.message.edit_text(f"✅ Готово. В режиме приманки я буду отвечать мошенникам как <b>{name}</b> — "
+                                     "в твоём стиле и от твоего лица.\nИзменить: /profile", parse_mode="HTML")
 
 
 # ---------- главное: каждое сообщение в личке владельца ----------
@@ -143,7 +166,7 @@ def stop_button(number):
 
 async def send_bait_reply(bot: Bot, connection, chat_id, history):
     """Придумывает реплику «доверчивого человека» и отправляет её мошеннику от имени владельца."""
-    reply = await asyncio.to_thread(bait_reply, history)
+    reply = await asyncio.to_thread(bait_reply, history, profiles.get(connection.user.id))
     # Как живой человек: сначала «прочитал и думает», потом «печатает…» — дольше для длинных ответов
     await asyncio.sleep(random.uniform(*BAIT_DELAY))
     try:
