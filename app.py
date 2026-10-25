@@ -90,7 +90,10 @@ dp.include_router(checks_router)  # подключаем после того, к
 
 async def main():
     """Запускает бота: он постоянно спрашивает Telegram о новых сообщениях."""
-    await bot.set_my_commands(COMMANDS)  # команды в синей кнопке «Меню»
+    try:
+        await bot.set_my_commands(COMMANDS)  # команды в синей кнопке «Меню»
+    except Exception as e:  # нет сети — не падаем: меню-команды не главное, бот переподключится сам
+        print(f"⚠️ Нет связи с Telegram ({type(e).__name__}). Проверьте интернет/VPN — бот будет пытаться снова.")
     print("Бот запущен. Остановить: Ctrl+C")
     await dp.start_polling(bot)
 
