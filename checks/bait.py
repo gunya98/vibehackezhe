@@ -5,7 +5,7 @@ import re
 from datetime import datetime
 
 
-from checks.bait_phrases import ASK, DEFAULT, HOOKS, PROGRESS, pick_topic
+from checks.bait_phrases import ASK, DEFAULT, HOOKS, PROGRESS, TECH_CONFUSION, find_tech_term, pick_topic
 from checks.llm import ask_llm, provider
 from profiles import DEFAULT as DEFAULT_PROFILE, feminize, persona, style_examples
 
@@ -84,6 +84,12 @@ def fallback_reply(history, profile=None, stage=0, target=None):
         phrases = PROGRESS
     if target and random.random() < 0.6:     # чаще всего — выпрашиваем недостающие данные
         phrases = ASK[target]
+    age = (profile or DEFAULT_PROFILE)["age"]
+    term = find_tech_term(last)
+    confusion_chance = {"middle": 0.6, "senior": 0.9}.get(age, 0)  # как часто персонаж «не понимает» слово
+    if term and random.random() < confusion_chance:  # старшие не понимают новых слов
+        phrases = [p.format(term=term) for p in TECH_CONFUSION[age]]
+        phrases = [p[0].upper() + p[1:] for p in phrases]
     used = "\n".join(history)
     fresh = [p for p in phrases if p not in used] or [p for p in DEFAULT if p not in used] or phrases
     if profile and profile["age"] == "young":  # у студентов нет жены и детей
