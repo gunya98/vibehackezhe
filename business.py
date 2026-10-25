@@ -35,6 +35,7 @@ READ_DELAY = (2, 6)            # через сколько секунд посл
 REPLY_TASKS = {}               # (подключение, чат) -> запланированный ответ приманки
 HOOK_TASKS = {}                # (подключение, чат) -> запланированный «крючок»
 BAIT_REPLIES = defaultdict(int)  # (подключение, чат) -> сколько раз приманка уже ответила
+STATS = defaultdict(lambda: {"checked": 0, "red": 0, "yellow": 0})  # id владельца -> счётчики для /stats
 COLLECTED = defaultdict(list)    # (подключение, чат) -> что выпросили у мошенника: [(тип, значение), ...]
 HOOKS_SENT = defaultdict(int)    # (подключение, чат) -> сколько «крючков» отправлено с последнего ответа мошенника
 
@@ -137,6 +138,9 @@ async def on_message(message: Message, bot: Bot):
         print(f"[business] ошибка анализа: {e}")
         return
     print(f"[business] {message.from_user.full_name}: {report['emoji']} «{text[:50]}»")
+    STATS[connection.user.id]["checked"] += 1
+    if report["level"] in ("red", "yellow"):
+        STATS[connection.user.id][report["level"]] += 1
 
     # 3. Предупреждаем один раз на чат и повторно — только если угроза выросла
     if RANK[report["level"]] <= RANK[WARNED.get(key, "green")]:
@@ -308,6 +312,16 @@ async def on_stop_button(callback: CallbackQuery):
     await callback.message.edit_reply_markup(reply_markup=None)
     await callback.message.answer("⏹ Приманка выключена. Дальше переписку ведёшь ты — я снова только проверяю "
                                   "сообщения и предупреждаю.\n\n" + summary(key), parse_mode="HTML")
+
+
+def owner_stats(owner_id):
+    """Статистика защиты для владельца: сколько проверено, сколько угроз, что выпрошено у мошенников."""
+    keys = [key for key in set(BAIT_REPLIES) | set(COLLECTED) if CONNECTIONS.get(key[0]) and
+            CONNECTIONS[key[0]].user.id == owner_id]
+    return {**STATS[owner_id],
+            "bait_replies": sum(BAIT_REPLIES[k] for k in keys),
+            "collected": [item for k in keys for item in COLLECTED[k]],
+            "connected": any(c.user.id == owner_id and c.is_enabled for c in CONNECTIONS.values())}
 
 
 def summary(key):

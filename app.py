@@ -8,7 +8,7 @@
 import asyncio
 import os
 
-from aiogram import Bot, Dispatcher, F
+from aiogram import Bot, Dispatcher, F, Router
 from aiogram.filters import Command, CommandStart
 from aiogram.types import Message
 from dotenv import load_dotenv
@@ -17,12 +17,15 @@ load_dotenv()  # читаем ключи из файла .env
 
 import profiles  # noqa: E402
 from business import router as business_router  # noqa: E402
+from menu import COMMANDS, main_menu, router as menu_router  # noqa: E402
 from scoring import analyze, has_anything_to_check  # noqa: E402
 from ui import format_report, photo_to_b64  # noqa: E402
 
 bot = Bot(token=os.getenv("TELEGRAM_TOKEN"))
 dp = Dispatcher()
-dp.include_router(business_router)  # подключаем Business-режим
+checks_router = Router()            # проверка присланных сообщений — срабатывает последней
+dp.include_router(menu_router)      # меню (раньше остальных, чтобы кнопки не проверялись как сообщения)
+dp.include_router(business_router)  # Business-режим
 
 WELCOME = (
     "👋 Я защищаю от мошенников в Telegram.\n\n"
@@ -51,7 +54,7 @@ def get_origin(message):
 @dp.message(CommandStart())
 async def start(message: Message):
     """Ответ на команду /start."""
-    await message.answer(WELCOME, parse_mode="HTML")
+    await message.answer(WELCOME, parse_mode="HTML", reply_markup=main_menu())
 
 
 @dp.message(Command("profile"))
@@ -60,8 +63,8 @@ async def profile(message: Message):
     await message.answer(profiles.QUESTION, reply_markup=profiles.gender_buttons())
 
 
-@dp.message(F.chat.type == "private")
-async def check_private(message: Message):
+@checks_router.message(F.chat.type == "private")
+async def check_private(message: Message, bot: Bot):
     """Личка с ботом: проверяем всё, что прислали."""
     text = message.text or message.caption or ""
     await bot.send_chat_action(message.chat.id, "typing")
@@ -71,7 +74,7 @@ async def check_private(message: Message):
     await message.reply(format_report(report), parse_mode="HTML")
 
 
-@dp.message()
+@checks_router.message()
 async def check_group(message: Message):
     """Групповой чат: молчим, пока не увидим что-то подозрительное."""
     text = message.text or message.caption or ""
@@ -82,8 +85,12 @@ async def check_group(message: Message):
         await message.reply(format_report(report), parse_mode="HTML")
 
 
+dp.include_router(checks_router)  # подключаем после того, как к нему добавлены обработчики
+
+
 async def main():
     """Запускает бота: он постоянно спрашивает Telegram о новых сообщениях."""
+    await bot.set_my_commands(COMMANDS)  # команды в синей кнопке «Меню»
     print("Бот запущен. Остановить: Ctrl+C")
     await dp.start_polling(bot)
 

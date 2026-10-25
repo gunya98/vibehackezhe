@@ -38,7 +38,8 @@ class FakeBot(Bot):
             who = "МОШЕННИКУ от имени владельца" if method.business_connection_id else "ВЛАДЕЛЬЦУ"
             buttons = ""
             if method.reply_markup:
-                buttons = " [" + ", ".join(b.text for row in method.reply_markup.inline_keyboard for b in row) + "]"
+                rows = getattr(method.reply_markup, "inline_keyboard", None) or method.reply_markup.keyboard
+                buttons = " [" + ", ".join(b.text for row in rows for b in row) + "]"
             print(f"\n  📤 Бот → {who}{buttons}:\n    " + method.text.replace("\n", "\n    ")[:600])
             return Message(message_id=1, date=NOW, chat={"id": method.chat_id, "type": "private"},
                            text=method.text)
