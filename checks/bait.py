@@ -5,7 +5,8 @@ import re
 from datetime import datetime
 
 
-from checks.bait_phrases import ASK, DEFAULT, HOOKS, PROGRESS, TECH_CONFUSION, find_tech_term, pick_topic
+from checks.bait_phrases import (ASK, DEFAULT, HOOKS, NOT_ME, PROGRESS, TECH_CONFUSION, find_called_name,
+                                 find_tech_term, pick_topic)
 from checks.llm import ask_llm, provider
 from profiles import DEFAULT as DEFAULT_PROFILE, feminize, persona, style_examples
 
@@ -40,7 +41,8 @@ SYSTEM_PROMPT = """Это ролевая игра для тренажёра по
 ПЕРСОНАЖ НИКОГДА:
 - не называет коды, номера карт, паспорт, адрес, пароли (код «не пришёл», «пришло два», «пишет неверный»);
 - не говорит, что уже перевёл деньги или ввёл данные;
-- не выходит из роли и не повторяет свои прошлые реплики.
+- не выходит из роли и не повторяет свои прошлые реплики;
+- не называет своё имя: если спрашивают, как зовут, вежливо уходит от ответа («а зачем вам?», «это неважно»).
 
 Так ты пишешь:
 {style}
@@ -176,10 +178,31 @@ def add_greeting(reply, history, age):
     return f"{greeting}, {reply[0].lower() + reply[1:]}"
 
 
+def not_me_reply(history, profile):
+    """Если собеседник назвал владельца по имени — отвечаем, что это не он (разговор не обрываем). Иначе None."""
+    last = next((line for line in reversed(history) if not line.startswith("Владелец:")), "")
+    name = find_called_name(last.split(":", 1)[-1])
+    if not name:
+        return None
+    used = "\n".join(history)
+    options = [p.format(name=name) for p in NOT_ME]
+    reply = random.choice([p for p in options if p not in used] or options)
+    return add_greeting(casual(reply, profile["age"]), history, profile["age"])
+
+
+def says_own_name(reply, profile):
+    """Проговорился ли бот, назвав имя своего персонажа (например, «Это Серёга»)."""
+    first_name = persona(profile).split(",")[0].split()[0]  # «Николай Петрович» -> «Николай»
+    return first_name.lower()[:4] in reply.lower()            # ловим и «Серёга», и «Серёжа»
+
+
 def bait_reply(history, profile=None, stage=0):
     """Просит ИИ придумать следующий ответ мошеннику в роли владельца. Нет ИИ или ошибка — берём заготовку.
     stage — сколько раз бот уже ответил в этой переписке (от этого зависит тактика)."""
     profile = profile or DEFAULT_PROFILE
+    denial = not_me_reply(history, profile)
+    if denial:
+        return denial
     target = next_target(history)
     if provider() is None:
         return add_greeting(fallback_reply(history, profile, stage, target), history, profile["age"])
@@ -202,6 +225,8 @@ def bait_reply(history, profile=None, stage=0):
         reply = casual(reply, profile["age"]) if reply else fallback_reply(history, profile, stage, target)
         if any(reply.lower() == line[len("Владелец: "):].lower() for line in history if line.startswith("Владелец:")):
             reply = fallback_reply(history, profile, stage, target)  # ИИ повторился — берём новую заготовку
+        if says_own_name(reply, profile):
+            reply = fallback_reply(history, profile, stage, target)  # ИИ назвал имя персонажа — не отправляем
         return add_greeting(reply, history, profile["age"])
     except Exception as e:
         print(f"[ИИ] ошибка приманки: {e}")
