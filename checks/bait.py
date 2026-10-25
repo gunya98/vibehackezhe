@@ -23,6 +23,7 @@ SYSTEM_PROMPT = """Ты — живой человек, владелец этог
 - Не объясняй, не рассуждай, не извиняйся длинно. Просто реагируй, как человек на бегу.
 - Без эмодзи, кавычек и подписей. Только текст сообщения.
 - Говори в своём роде (мужском или женском) и в стиле своего возраста.
+- {punctuation}
 
 НЕЛЬЗЯ:
 - называть коды, номера карт, паспорт, адрес, пароли (код «не пришёл», «пришло два», «смахнул», «пишет неверный»);
@@ -56,7 +57,36 @@ def fallback_reply(history, profile=None):
     reply = random.choice(fresh)
     if profile and profile["gender"] == "f":
         reply = feminize(reply)
-    return reply
+    return casual(reply, (profile or DEFAULT_PROFILE)["age"])
+
+
+PUNCTUATION_RULE = {
+    "young": "Почти без знаков препинания: без запятых и точек, всё с маленькой буквы. Вопросительный знак редко.",
+    "adult": "Минимум пунктуации: запятые почти не ставь, точку в конце не ставь, с маленькой буквы.",
+    "middle": "Пиши обычными предложениями, но без точки в конце.",
+    "senior": "Пиши полными предложениями, можно с многоточиями.",
+}
+
+
+def casual(text, age):
+    """Убирает лишнюю пунктуацию, как в живой переписке. Чем моложе персонаж, тем меньше знаков."""
+    if age in ("middle", "senior"):
+        return text if age == "senior" else text.rstrip(".")  # старшие пишут «правильно»
+    keep_question = random.random() < (0.3 if age == "young" else 0.6)
+    # Новое предложение после точки/вопроса продолжаем с маленькой буквы: «код? Там» -> «код? там»
+    text = re.sub(r"([.?!…])\s+([А-ЯЁA-Z])", lambda m: m.group(1) + " " + m.group(2).lower(), text)
+    text = text.replace("«", "").replace("»", "").replace('"', "")  # ёлочки в мессенджере никто не набирает
+    text = re.sub(r"\s*[—–-]\s+", " ", text)                    # тире
+    text = re.sub(r"[;:]", "", text)
+    text = re.sub(r",\s*", " ", text) if age == "young" or random.random() < 0.8 else text  # запятые
+    text = re.sub(r"(?<!\.)\.(?!\.)\s*", " ", text)           # одиночные точки (многоточия не трогаем)
+    if not keep_question:
+        text = text.replace("?", "")
+    text = text.replace("!", "")
+    text = re.sub(r"\s+", " ", text).strip()
+    if text[:1].isupper() and (age == "young" or random.random() < 0.8):
+        text = text[0].lower() + text[1:]
+    return text
 
 
 # Канцелярские фразы, которыми ИИ любит начинать ответ, а живые люди так не пишут
@@ -107,11 +137,13 @@ def bait_reply(history, profile=None):
     dialog = [line.replace("Владелец:", "Ты:").replace("Собеседник:", "Он:").replace("Мошенник:", "Он:")
               for line in history[-8:]]
     system = SYSTEM_PROMPT.format(persona=persona(profile), examples=examples,
+                                  punctuation=PUNCTUATION_RULE[profile["age"]],
                                   style="\n".join(f"- {p}" for p in style_examples(profile)))
     try:
         reply = ask_llm(USER_PROMPT.format(history="\n".join(dialog)), max_tokens=40,
                         system=system, temperature=0.9)
-        return humanize(reply, lowercase=profile["age"] in ("young", "adult")) or fallback_reply(history, profile)
+        reply = humanize(reply, lowercase=profile["age"] in ("young", "adult"))
+        return casual(reply, profile["age"]) if reply else fallback_reply(history, profile)
     except Exception as e:
         print(f"[ИИ] ошибка приманки: {e}")
         return fallback_reply(history, profile)
