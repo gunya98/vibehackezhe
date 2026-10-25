@@ -28,7 +28,7 @@ def ask_llm(prompt, image_b64=None, max_tokens=600):
         # Для хакатона это допустимо; в настоящем продукте нужно установить сертификат.
         with GigaChat(credentials=os.getenv("GIGACHAT_CREDENTIALS").strip(),
                       scope=os.getenv("GIGACHAT_SCOPE", "GIGACHAT_API_PERS"),
-                      model=os.getenv("GIGACHAT_MODEL", "GigaChat"),
+                      model=os.getenv("GIGACHAT_MODEL", "GigaChat-2"),
                       verify_ssl_certs=False) as giga:
             response = giga.chat({"messages": [{"role": "user", "content": prompt}], "max_tokens": max_tokens})
         return response.choices[0].message.content
