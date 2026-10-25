@@ -56,6 +56,8 @@ async def send(update_type, payload):
     counter += 1
     await app.dp.feed_update(bot, Update.model_validate({"update_id": counter, update_type: payload},
                                                         context={"bot": bot}))
+    pending = [t for t in business.REPLY_TASKS.values() if not t.done()]  # ждём запланированные ответы
+    await asyncio.gather(*pending, return_exceptions=True)
 
 
 def msg(sender, text):
@@ -65,6 +67,7 @@ def msg(sender, text):
 
 async def main():
     business.BAIT_DELAY = (0, 0)  # без пауз в имитации
+    business.HOOK_AFTER = (3600, 3600)  # «крючки» в основной имитации не нужны
 
     print("▶ Владелец подключает бота")
     await send("business_connection", {"id": CONN_ID, "user": OWNER, "user_chat_id": 111, "date": NOW,

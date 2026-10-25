@@ -2,13 +2,14 @@
 import asyncio
 import html
 import random
+import re
 from collections import defaultdict, deque
 
 from aiogram import Bot, F, Router
 from aiogram.types import BusinessConnection, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 import profiles
-from checks.bait import bait_reply, extract_trophies, save_trophies
+from checks.bait import bait_reply, extract_trophies, hook_reply, save_trophies
 from scoring import analyze
 from ui import format_report, photo_to_b64
 
@@ -25,6 +26,14 @@ BAIT_DELAY = (15, 30)  # сколько секунд бот «читает и д
 TYPING_SPEED = 5       # символов в секунду, с которыми «печатает» бот (человек с телефона — 3–7)
 MAX_TYPING = 25        # дольше стольких секунд «печатать» не будем
 # Итого: ответ приходит примерно через 25–55 секунд. Для быстрого демо поставьте BAIT_DELAY = (3, 6).
+HOOK_AFTER = (150, 300)  # если мошенник молчит столько секунд — пишем ему сами, чтобы вернуть
+MAX_HOOKS = 2            # не больше стольких «крючков» подряд, чтобы не выглядеть навязчиво
+
+LAST_TEXT = {}                 # (подключение, чат) -> последнее сообщение собеседника (чтобы не отвечать на дубли)
+REPLY_TASKS = {}               # (подключение, чат) -> запланированный ответ приманки
+HOOK_TASKS = {}                # (подключение, чат) -> запланированный «крючок»
+BAIT_REPLIES = defaultdict(int)  # (подключение, чат) -> сколько раз приманка уже ответила
+HOOKS_SENT = defaultdict(int)    # (подключение, чат) -> сколько «крючков» отправлено с последнего ответа мошенника
 
 
 async def get_connection(bot: Bot, connection_id):
@@ -99,6 +108,14 @@ async def on_message(message: Message, bot: Bot):
         return
 
     # 2. Пишет собеседник
+    normalized = re.sub(r"\W+", " ", text.lower()).strip()
+    if normalized and normalized == LAST_TEXT.get(key):
+        print(f"[business] повтор сообщения — не отвечаем: «{text[:40]}»")
+        return
+    LAST_TEXT[key] = normalized
+    cancel(HOOK_TASKS, key)  # мошенник ответил — «крючок» не нужен
+    HOOKS_SENT[key] = 0
+
     history = list(HISTORY[key])
     HISTORY[key].append(f"Собеседник: {text or '(картинка)'}")
 
@@ -157,7 +174,22 @@ async def bait_step(bot: Bot, message: Message, connection, history):
                                f"🎣 Мошенник выдал реквизиты, сохранил в базу:\n{found}", parse_mode="HTML",
                                reply_markup=stop_button(BAIT[key]))
 
-    await send_bait_reply(bot, connection, message.chat.id, history + [f"Мошенник: {text}"])
+    schedule_reply(bot, connection, message.chat.id)
+
+
+def cancel(tasks, key):
+    """Отменяет запланированное действие (ответ или «крючок»), если оно ещё не выполнено."""
+    task = tasks.pop(key, None)
+    if task and not task.done():
+        task.cancel()
+
+
+def schedule_reply(bot: Bot, connection, chat_id):
+    """Планирует ответ мошеннику. Если он пишет ещё до нашего ответа — старый план отменяется,
+    и мы отвечаем один раз на всю пачку его сообщений."""
+    key = (connection.id, chat_id)
+    cancel(REPLY_TASKS, key)
+    REPLY_TASKS[key] = asyncio.create_task(send_bait_reply(bot, connection, chat_id))
 
 
 def stop_button(number):
@@ -180,24 +212,43 @@ async def show_typing(bot: Bot, chat_id, connection_id, seconds):
         left -= 4
 
 
-async def send_bait_reply(bot: Bot, connection, chat_id, history):
-    """Придумывает реплику «доверчивого человека» и отправляет её мошеннику от имени владельца."""
-    reply = await asyncio.to_thread(bait_reply, history, profiles.get(connection.user.id))
-    # Как живой человек: сначала «прочитал и думает», потом «печатает…» — дольше для длинных ответов
-    await asyncio.sleep(random.uniform(*BAIT_DELAY))
+async def send_bait_reply(bot: Bot, connection, chat_id, hook=False):
+    """Отвечает мошеннику от имени владельца, как живой человек: «читает и думает», «печатает…», отвечает.
+    hook=True — это не ответ, а сообщение, чтобы вернуть замолчавшего мошенника."""
+    key = (connection.id, chat_id)
+    if not hook:
+        await asyncio.sleep(random.uniform(*BAIT_DELAY))  # за это время мошенник может дописать ещё
+    history = list(HISTORY[key])                           # берём историю уже со всеми его сообщениями
+    profile = profiles.get(connection.user.id)
+    if hook:
+        reply = await asyncio.to_thread(hook_reply, history, profile)
+    else:
+        reply = await asyncio.to_thread(bait_reply, history, profile, BAIT_REPLIES[key])
     if BAIT_DELAY[1]:  # в имитации паузы выключены
-        typing_time = min(len(reply) / TYPING_SPEED, MAX_TYPING)
-        await show_typing(bot, chat_id, connection.id, typing_time)
-    if (connection.id, chat_id) not in BAIT:
+        await show_typing(bot, chat_id, connection.id, min(len(reply) / TYPING_SPEED, MAX_TYPING))
+    if key not in BAIT:
         return  # пока «думали», владелец нажал «Остановить»
     try:
         await bot.send_message(chat_id, reply, business_connection_id=connection.id)
-        HISTORY[(connection.id, chat_id)].append(f"Владелец: {reply}")
-        print(f"[business] приманка ответила: «{reply}»")
     except Exception as e:
         print(f"[business] не смог ответить: {e}")
         await bot.send_message(connection.user_chat_id, f"Не получилось ответить мошеннику: {e}\n"
                                                         "Проверь, что у бота есть право отвечать на сообщения.")
+        return
+    HISTORY[key].append(f"Владелец: {reply}")
+    BAIT_REPLIES[key] += 1
+    print(f"[business] приманка {'крючок' if hook else 'ответила'} (№{BAIT_REPLIES[key]}): «{reply}»")
+    if HOOKS_SENT[key] < MAX_HOOKS:
+        HOOK_TASKS[key] = asyncio.create_task(hook_later(bot, connection, chat_id))
+
+
+async def hook_later(bot: Bot, connection, chat_id):
+    """Ждёт; если мошенник так и не ответил — пишет ему сам («Вы тут? Я почти всё сделал»)."""
+    await asyncio.sleep(random.uniform(*HOOK_AFTER))
+    key = (connection.id, chat_id)
+    if key in BAIT:
+        HOOKS_SENT[key] += 1
+        await send_bait_reply(bot, connection, chat_id, hook=True)
 
 
 @router.callback_query(F.data.startswith("bait:"))
@@ -216,7 +267,7 @@ async def on_bait_button(callback: CallbackQuery, bot: Bot):
 
     connection_id, chat_id = key
     connection = await get_connection(bot, connection_id)
-    await send_bait_reply(bot, connection, chat_id, list(HISTORY[key]))
+    schedule_reply(bot, connection, chat_id)
 
 
 @router.callback_query(F.data.startswith("stop:"))
@@ -227,6 +278,8 @@ async def on_stop_button(callback: CallbackQuery):
         await callback.answer("Приманка уже выключена")
         return
     del BAIT[key]
+    cancel(REPLY_TASKS, key)
+    cancel(HOOK_TASKS, key)
     await callback.answer("⏹ Приманка выключена")
     await callback.message.edit_reply_markup(reply_markup=None)
     await callback.message.answer("⏹ Приманка выключена. Дальше переписку ведёшь ты — я снова только проверяю "
