@@ -103,17 +103,22 @@ def check_links(text):
     if not urls:
         return None  # ссылок нет — сигнала нет
 
+    domains = [get_domain(url) for url in urls]
     all_problems = []
-    for url in urls:
-        all_problems += check_one_domain(get_domain(url))
+    for domain in domains:
+        all_problems += check_one_domain(domain)
 
     if not all_problems:
-        return {
-            "name": "🔗 Ссылки",
-            "verdict": "safe",
-            "confidence": 0.6,
-            "explanation": "Ссылки ведут на официальные или обычные сайты",
-        }
+        if all(is_official(d) for d in domains):
+            # Опасность «безопасно» = 0, уверенность 0.6 — не 1.0, потому что и по настоящей ссылке
+            # мошенник может дать опасную инструкцию («зайдите на Госуслуги и продиктуйте код»).
+            return {
+                "name": "🔗 Ссылки",
+                "verdict": "safe",
+                "confidence": 0.6,
+                "explanation": "Ссылки ведут на официальные сайты",
+            }
+        return None  # незнакомый сайт без признаков подделки: мы про него ничего не знаем — сигнала нет
 
     has_twin = any("подмен" in p or "других алфавитов" in p for p in all_problems)
     return {
