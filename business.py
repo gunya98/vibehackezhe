@@ -9,7 +9,7 @@ from aiogram import Bot, F, Router
 from aiogram.types import BusinessConnection, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 import profiles
-from checks.bait import bait_reply, extract_trophies, hook_reply, save_trophies
+from checks.bait import WANTED, bait_reply, extract_trophies, hook_reply, save_trophies
 from scoring import analyze
 from ui import format_report, photo_to_b64
 
@@ -35,6 +35,7 @@ READ_DELAY = (2, 6)            # через сколько секунд посл
 REPLY_TASKS = {}               # (подключение, чат) -> запланированный ответ приманки
 HOOK_TASKS = {}                # (подключение, чат) -> запланированный «крючок»
 BAIT_REPLIES = defaultdict(int)  # (подключение, чат) -> сколько раз приманка уже ответила
+COLLECTED = defaultdict(list)    # (подключение, чат) -> что выпросили у мошенника: [(тип, значение), ...]
 HOOKS_SENT = defaultdict(int)    # (подключение, чат) -> сколько «крючков» отправлено с последнего ответа мошенника
 
 
@@ -168,13 +169,17 @@ async def bait_step(bot: Bot, message: Message, connection, history):
     """Один шаг приманки: забираем реквизиты мошенника и отвечаем ему от имени владельца."""
     text = message.text or message.caption or ""
 
-    trophies = extract_trophies(text)
-    if trophies:
-        save_trophies(trophies, text)
-        found = "\n".join(f"• {kind}: <code>{html.escape(value)}</code>" for kind, value in trophies)
-        key = (connection.id, message.chat.id)
+    key = (connection.id, message.chat.id)
+    new = [t for t in extract_trophies(text) if t not in COLLECTED[key]]  # только то, чего ещё не было
+    if new:
+        save_trophies(new, text)
+        COLLECTED[key] += new
+        found = "\n".join(f"• {kind}: <code>{html.escape(value)}</code>" for kind, value in new)
+        missing = [k for k in WANTED if k not in {kind for kind, _ in COLLECTED[key]}]
+        status = ("\n\n✅ Все данные собраны, дальше просто тяну время." if not missing
+                  else "\n\nЕщё выпрашиваю: " + ", ".join(missing))
         await bot.send_message(connection.user_chat_id,
-                               f"🎣 Мошенник выдал реквизиты, сохранил в базу:\n{found}", parse_mode="HTML",
+                               f"🎣 Мошенник выдал данные, сохранил в базу:\n{found}{status}", parse_mode="HTML",
                                reply_markup=stop_button(BAIT[key]))
 
     schedule_reply(bot, connection, message.chat.id)
@@ -302,7 +307,19 @@ async def on_stop_button(callback: CallbackQuery):
     await callback.answer("⏹ Приманка выключена")
     await callback.message.edit_reply_markup(reply_markup=None)
     await callback.message.answer("⏹ Приманка выключена. Дальше переписку ведёшь ты — я снова только проверяю "
-                                  "сообщения и предупреждаю.")
+                                  "сообщения и предупреждаю.\n\n" + summary(key), parse_mode="HTML")
+
+
+def summary(key):
+    """Итог приманки: сколько раз ответили и что выпросили у мошенника."""
+    lines = [f"📋 <b>Итог:</b> бот ответил мошеннику {BAIT_REPLIES[key]} раз(а)."]
+    if COLLECTED[key]:
+        lines.append("Собрано:")
+        lines += [f"• {kind}: <code>{html.escape(value)}</code>" for kind, value in COLLECTED[key]]
+        lines.append("Эти данные можно передать в банк и пожаловаться на аккаунт в Telegram.")
+    else:
+        lines.append("Данных выпросить не удалось.")
+    return "\n".join(lines)
 
 
 @router.callback_query(F.data == "ignore")

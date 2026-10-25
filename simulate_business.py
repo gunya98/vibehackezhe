@@ -93,7 +93,7 @@ async def main():
                                   "message": {"message_id": 5, "date": NOW,
                                               "chat": {"id": 111, "type": "private"}, "text": "warning"}})
 
-    text = "Не можете найти код? Тогда переведите деньги на безопасный счёт: карта 2202 2063 1234 5678"
+    text = "Меня зовут Алексей Смирнов, служба безопасности Сбербанка. Переведите на карту 2202 2063 1234 5678"
     print(f"\n▶ Мошенник: {text}")
     await send("business_message", msg(SCAMMER, text))
 

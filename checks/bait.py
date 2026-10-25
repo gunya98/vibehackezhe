@@ -5,7 +5,7 @@ import re
 from datetime import datetime
 
 
-from checks.bait_phrases import DEFAULT, HOOKS, PROGRESS, pick_topic
+from checks.bait_phrases import ASK, DEFAULT, HOOKS, PROGRESS, pick_topic
 from checks.llm import ask_llm, provider
 from profiles import DEFAULT as DEFAULT_PROFILE, feminize, persona, style_examples
 
@@ -33,6 +33,7 @@ SYSTEM_PROMPT = """Ты — живой человек, владелец этог
 что ещё чуть-чуть — и у него получится. Обещай, соглашайся, но каждый раз чуть-чуть не доделывай.
 
 СЕЙЧАС: {stage}
+ГЛАВНОЕ В ЭТОМ СООБЩЕНИИ: {target}
 
 НЕЛЬЗЯ:
 - называть коды, номера карт, паспорт, адрес, пароли (код «не пришёл», «пришло два», «смахнул», «пишет неверный»);
@@ -51,6 +52,10 @@ USER_PROMPT = """Переписка («Он» — мошенник, «Ты» —
 
 # Что собираем из сообщений мошенника
 TROPHY_PATTERNS = {
+    "организация": r"(?i:из|это|служба безопасности|представляю|пишу из|звоню из|отдела?)\s+"
+                   r"([«\"]?[А-ЯЁA-Z][\w-]+[»\"]?(?:\s+[«\"]?[А-ЯЁA-Z][\w-]+[»\"]?){0,3})",
+    "имя": r"(?i:меня зовут|зовут меня|мо[её] имя|с вами говорит|на связи|специалист|сотрудник|следователь|"
+           r"лейтенант|капитан|майор|менеджер)\s+([А-ЯЁ][а-яё]+(?:\s+[А-ЯЁ][а-яё]+){0,2})",
     "карта": r"\b(?:\d[ -]?){15,18}\d\b",
     "телефон": r"(?:\+7|\b8)[\s(-]*\d{3}[\s)-]*\d{3}[\s-]*\d{2}[\s-]*\d{2}\b",
     "ссылка": r"(?:https?://|\b)(?:[a-z0-9-]+\.)+[a-z]{2,}(?:/\S*)?",
@@ -70,12 +75,14 @@ def stage_hint(stage):
     return [hint for start, hint in STAGES if stage >= start][-1]
 
 
-def fallback_reply(history, profile=None, stage=0):
+def fallback_reply(history, profile=None, stage=0, target=None):
     """Ответ без ИИ: берём фразу по теме последнего сообщения мошенника, которой ещё не было в диалоге."""
     last = next((line for line in reversed(history) if not line.startswith("Владелец:")), "")
     phrases = pick_topic(last)
     if stage >= 3 and random.random() < 0.5:  # чем дольше разговор, тем чаще «почти получилось»
         phrases = PROGRESS
+    if target and random.random() < 0.6:     # чаще всего — выпрашиваем недостающие данные
+        phrases = ASK[target]
     used = "\n".join(history)
     fresh = [p for p in phrases if p not in used] or [p for p in DEFAULT if p not in used] or phrases
     if profile and profile["age"] == "young":  # у студентов нет жены и детей
@@ -166,8 +173,9 @@ def bait_reply(history, profile=None, stage=0):
     """Просит ИИ придумать следующий ответ мошеннику в роли владельца. Нет ИИ или ошибка — берём заготовку.
     stage — сколько раз бот уже ответил в этой переписке (от этого зависит тактика)."""
     profile = profile or DEFAULT_PROFILE
+    target = next_target(history)
     if provider() is None:
-        return add_greeting(fallback_reply(history, profile, stage), history, profile["age"])
+        return add_greeting(fallback_reply(history, profile, stage, target), history, profile["age"])
 
     # 3 заготовки по теме последнего сообщения мошенника — как пример, что примерно ответить
     last = next((line for line in reversed(history) if not line.startswith("Владелец:")), "")
@@ -177,20 +185,20 @@ def bait_reply(history, profile=None, stage=0):
     # Последние 8 реплик, подписанные коротко и понятно для модели
     dialog = [line.replace("Владелец:", "Ты:").replace("Собеседник:", "Он:").replace("Мошенник:", "Он:")
               for line in history[-8:]]
-    system = SYSTEM_PROMPT.format(persona=persona(profile), examples=examples, stage=stage_hint(stage),
+    system = SYSTEM_PROMPT.format(persona=persona(profile), examples=examples, stage=stage_hint(stage), target=target_hint(target),
                                   punctuation=PUNCTUATION_RULE[profile["age"]],
                                   style="\n".join(f"- {p}" for p in style_examples(profile)))
     try:
         reply = ask_llm(USER_PROMPT.format(history="\n".join(dialog)), max_tokens=40,
                         system=system, temperature=0.9)
         reply = humanize(reply, lowercase=profile["age"] in ("young", "adult"))
-        reply = casual(reply, profile["age"]) if reply else fallback_reply(history, profile, stage)
+        reply = casual(reply, profile["age"]) if reply else fallback_reply(history, profile, stage, target)
         if any(reply.lower() == line[len("Владелец: "):].lower() for line in history if line.startswith("Владелец:")):
-            reply = fallback_reply(history, profile, stage)  # ИИ повторился — берём новую заготовку
+            reply = fallback_reply(history, profile, stage, target)  # ИИ повторился — берём новую заготовку
         return add_greeting(reply, history, profile["age"])
     except Exception as e:
         print(f"[ИИ] ошибка приманки: {e}")
-        return add_greeting(fallback_reply(history, profile, stage), history, profile["age"])
+        return add_greeting(fallback_reply(history, profile, stage, target), history, profile["age"])
 
 
 HOOK_REQUEST = """Мошенник замолчал и давно не отвечает. Напиши ему сам короткое вежливое сообщение,
@@ -209,7 +217,7 @@ def hook_reply(history, profile=None):
         return fallback
     dialog = [line.replace("Владелец:", "Ты:").replace("Собеседник:", "Он:") for line in history[-8:]]
     system = SYSTEM_PROMPT.format(persona=persona(profile), examples="\n".join(f"- {h}" for h in HOOKS[:3]),
-                                  stage=stage_hint(7), punctuation=PUNCTUATION_RULE[profile["age"]],
+                                  stage=stage_hint(7), target=target_hint(next_target(history)), punctuation=PUNCTUATION_RULE[profile["age"]],
                                   style="\n".join(f"- {p}" for p in style_examples(profile)))
     try:
         reply = ask_llm("Переписка:\n" + "\n".join(dialog) + "\n\n" + HOOK_REQUEST, max_tokens=40,
@@ -225,9 +233,36 @@ def extract_trophies(text):
     """Находит в сообщении мошенника карты, телефоны и ссылки. Возвращает список (тип, значение)."""
     found = []
     for kind, pattern in TROPHY_PATTERNS.items():
-        for match in re.findall(pattern, text, flags=re.IGNORECASE):
-            found.append((kind, match.strip()))
+        flags = 0 if kind in ("организация", "имя") else re.IGNORECASE  # там важны заглавные буквы
+        for match in re.findall(pattern, text, flags=flags):
+            found.append((kind, match.strip(' «»"')))
     return found
+
+
+# Что пытаемся выпросить у мошенника — по порядку
+WANTED = ["организация", "имя", "телефон", "карта"]
+TARGET_HINT = {
+    "организация": "из какой он организации и отдела (банк, служба, полиция) — например, «чтобы записать»",
+    "имя": "его имя и фамилию или должность — например, «если связь прервётся, кого спросить»",
+    "телефон": "его номер телефона — «перезвоню, связь плохая» или «можно перевести по номеру?»",
+    "карта": "номер карты или счёта для перевода — «напишите цифрами, перепишу», «прошлую не принимает»",
+    "ссылка": "ссылку — «старая не открывается, пришлите ещё раз»",
+}
+
+
+def next_target(history):
+    """Какие данные мошенник ещё не выдал — их и будем выпрашивать (или None, если всё есть)."""
+    scam_lines = [line for line in history if not line.startswith("Владелец:")]
+    got = {kind for line in scam_lines for kind, _ in extract_trophies(line)}
+    wanted = WANTED + (["ссылка"] if re.search(r"ссылк|сайт|перейд|http", " ".join(scam_lines), re.I) else [])
+    return next((kind for kind in wanted if kind not in got), None)
+
+
+def target_hint(target):
+    """Подсказка ИИ, что сейчас выпросить."""
+    if target is None:
+        return "Все данные уже получены. Тяни время и проси повторить реквизиты — вдруг дадут другие."
+    return "Естественно, под благовидным предлогом, выпроси у него " + TARGET_HINT[target] + "."
 
 
 def save_trophies(trophies, scam_text):
