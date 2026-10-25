@@ -30,6 +30,8 @@ HOOK_AFTER = (150, 300)  # если мошенник молчит столько
 MAX_HOOKS = 2            # не больше стольких «крючков» подряд, чтобы не выглядеть навязчиво
 
 LAST_TEXT = {}                 # (подключение, чат) -> последнее сообщение собеседника (чтобы не отвечать на дубли)
+LAST_MSG_ID = {}               # (подключение, чат) -> номер последнего сообщения собеседника (чтобы отметить прочитанным)
+READ_DELAY = (2, 6)            # через сколько секунд после сообщения мошенника «прочитать» его
 REPLY_TASKS = {}               # (подключение, чат) -> запланированный ответ приманки
 HOOK_TASKS = {}                # (подключение, чат) -> запланированный «крючок»
 BAIT_REPLIES = defaultdict(int)  # (подключение, чат) -> сколько раз приманка уже ответила
@@ -113,6 +115,7 @@ async def on_message(message: Message, bot: Bot):
         print(f"[business] повтор сообщения — не отвечаем: «{text[:40]}»")
         return
     LAST_TEXT[key] = normalized
+    LAST_MSG_ID[key] = message.message_id
     cancel(HOOK_TASKS, key)  # мошенник ответил — «крючок» не нужен
     HOOKS_SENT[key] = 0
 
@@ -212,12 +215,28 @@ async def show_typing(bot: Bot, chat_id, connection_id, seconds):
         left -= 4
 
 
+async def mark_read(bot: Bot, connection, chat_id):
+    """Отмечает сообщения мошенника прочитанными (две галочки), как сделал бы человек.
+    Нужно право «читать сообщения» в настройках чат-бота Telegram для бизнеса."""
+    key = (connection.id, chat_id)
+    if key not in LAST_MSG_ID:
+        return
+    try:
+        await bot.read_business_message(business_connection_id=connection.id, chat_id=chat_id,
+                                        message_id=LAST_MSG_ID[key])
+    except Exception as e:
+        print(f"[business] не смог отметить прочитанным (проверь право «читать сообщения»): {e}")
+
+
 async def send_bait_reply(bot: Bot, connection, chat_id, hook=False):
     """Отвечает мошеннику от имени владельца, как живой человек: «читает и думает», «печатает…», отвечает.
     hook=True — это не ответ, а сообщение, чтобы вернуть замолчавшего мошенника."""
     key = (connection.id, chat_id)
     if not hook:
-        await asyncio.sleep(random.uniform(*BAIT_DELAY))  # за это время мошенник может дописать ещё
+        if BAIT_DELAY[1]:  # в имитации паузы выключены
+            await asyncio.sleep(random.uniform(*READ_DELAY))
+        await mark_read(bot, connection, chat_id)         # у мошенника появятся две галочки
+        await asyncio.sleep(random.uniform(*BAIT_DELAY))  # «думаем»; за это время мошенник может дописать ещё
     history = list(HISTORY[key])                           # берём историю уже со всеми его сообщениями
     profile = profiles.get(connection.user.id)
     if hook:

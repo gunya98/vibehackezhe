@@ -10,6 +10,7 @@ from datetime import datetime
 os.environ.setdefault("TELEGRAM_TOKEN", "123456:TEST_TOKEN_FOR_SIMULATION_ONLY_xxxxxxxx")
 
 from aiogram import Bot  # noqa: E402
+from aiogram.methods import ReadBusinessMessage  # noqa: E402
 from aiogram.methods import EditMessageText, GetBusinessConnection, SendMessage  # noqa: E402
 from aiogram.types import BusinessConnection, Message, Update  # noqa: E402
 
@@ -41,6 +42,8 @@ class FakeBot(Bot):
             print(f"\n  📤 Бот → {who}{buttons}:\n    " + method.text.replace("\n", "\n    ")[:600])
             return Message(message_id=1, date=NOW, chat={"id": method.chat_id, "type": "private"},
                            text=method.text)
+        if isinstance(method, ReadBusinessMessage):
+            print(f"  ✔✔ Бот отметил прочитанным сообщение №{method.message_id}")
         if isinstance(method, EditMessageText):
             print(f"\n  ✏️ Бот изменил сообщение владельцу:\n    {method.text}")
         return True  # остальные запросы (убрать кнопки, ответить на нажатие) считаем успешными
